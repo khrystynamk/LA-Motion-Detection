@@ -41,14 +41,17 @@ def poly_exp(f, c, sigma):
 
     # ----- [Equivalent Correlation Kernels section in the paper] -----
 
-    # Calculate applicability kernel (1D because it is separable, computationally is significantly more efficient)
+    # Calculate applicability kernel (1D because it is separable, computation is significantly more efficient)
     n = int(4 * sigma + 1)
     x = np.arange(-n, n + 1, dtype=int)
     a = np.exp(-(x**2) / (2 * sigma**2))  # a: applicability kernel [n]
 
     # b: calculate b from the paper. Calculate separately for X and Y dimensions
     # [n, 6]
+    # bx array has a shape determined by the shape of the applicability kernel a 
+    # with an additional dimension for the different terms in the polynomial basis
 
+    # ----- [Estimating the Coefficients of a Polynomial Model] -----
     # polynomial basis, {1, x, y, x^2, y^2, xy}
     # y = 1
     bx = np.stack(
@@ -70,6 +73,7 @@ def poly_exp(f, c, sigma):
     cf = c * f
 
     # ----- [Cartesian Separability section in the paper] -----
+    # The goal is to find the coefficients of a second-order polynomial that best fits the local signal.
 
     # G and v are used to calculate "r" from the paper: r = G^(-1)*v -> v = G*r
     # r is the parametrization of the 2nd order polynomial for f
@@ -79,14 +83,17 @@ def poly_exp(f, c, sigma):
     # Apply separable cross-correlations
 
     # Pre-calculate quantities recommended in paper
-    ab = np.einsum("i,ij->ij", a, bx)
-    abb = np.einsum("ij,ik->ijk", ab, bx)
+    # einsum does multiplication, summation and transposition faster
+    # i,ij->ij A has one axis i, B has 2 axes (i and j) -- dimension labels
+    ab = np.einsum("i,ij->ij", a, bx) # inner product (a · bm), this can be rewritten as (a[:, np.newaxis] * bx)
+    abb = np.einsum("ij,ik->ijk", ab, bx) # inner product (a · bm, bm), this can be rewritten as abb = np.matmul(ab[:, :, None], bx[:, None, :]) or ab[:, :, None] @ bx[:, None, :], where @ is shortcut for matmul
 
-    # Calculate G and v for each pixel with cross-correlation
+    # Calculate G and v for each pixel x with cross-correlation
     for i in range(bx.shape[-1]):
         for j in range(bx.shape[-1]):
             G[..., i, j] = scipy.ndimage.correlate1d(
-                c, abb[..., i, j], axis=0, mode="constant", cval=0
+                c, abb[..., i, j], axis=0, mode="constant", cval=0 #‘constant’ (k k k k | a b c d | k k k k)
+                # The input is extended by filling all values beyond the edge with cval
             )
 
         v[..., i] = scipy.ndimage.correlate1d(
@@ -94,10 +101,12 @@ def poly_exp(f, c, sigma):
         )
 
     # Pre-calculate quantities recommended in paper
-    ab = np.einsum("i,ij->ij", a, by)
-    abb = np.einsum("ij,ik->ijk", ab, by)
+    ab = np.einsum("i,ij->ij", a, by) # inner product (a · bk), can be rewritten as (a[:, np.newaxis] * by)
+    abb = np.einsum("ij,ik->ijk", ab, by) # inner product (a · bk, bk), can be rewritten as abb = np.matmul(ab[:, :, None], by[:, None, :]) or ab[:, :, None] @ by[:, None, :], where @ is shortcut for matmul
 
-    # Calculate G and v for each pixel with cross-correlation
+    # Calculate G and v for each pixel y with cross-correlation
+    # [..., i, j] is a shortcut to indicate that all axes preceding or following it should be fully included
+
     for i in range(bx.shape[-1]):
         for j in range(bx.shape[-1]):
             G[..., i, j] = scipy.ndimage.correlate1d(
@@ -115,18 +124,18 @@ def poly_exp(f, c, sigma):
 
     # Quadratic term
     A = np.empty(list(f.shape) + [2, 2])
-    A[..., 0, 0] = r[..., 3]
-    A[..., 0, 1] = r[..., 5] / 2
-    A[..., 1, 0] = A[..., 0, 1]
-    A[..., 1, 1] = r[..., 4]
+    A[..., 0, 0] = r[..., 3] # r_4
+    A[..., 0, 1] = r[..., 5] / 2 # r_6 / 2
+    A[..., 1, 0] = A[..., 0, 1] # r_6 / 2
+    A[..., 1, 1] = r[..., 4] # r_5
 
     # Linear term
     B = np.empty(list(f.shape) + [2])
-    B[..., 0] = r[..., 1]
-    B[..., 1] = r[..., 2]
+    B[..., 0] = r[..., 1] # r_2
+    B[..., 1] = r[..., 2] # r_3
 
     # constant term
-    C = r[..., 0]
+    C = r[..., 0] # r_1
 
     return A, B, C
 
