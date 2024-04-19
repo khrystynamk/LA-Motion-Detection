@@ -141,7 +141,7 @@ def poly_exp(f, c, sigma):
 
 
 def flow_iterative(
-    f1, f2, sigma, c1, c2, sigma_flow, num_iter=1, d=None, model="constant", mu=None
+    f1, f2, sigma, c1, c2, sigma_flow, num_iter=1
 ):
     """
     Calculates optical flow with an algorithm described by Gunnar Farneback
@@ -162,15 +162,6 @@ def flow_iterative(
         Applicability window Gaussian kernel sigma for polynomial matching
     num_iter
         Number of iterations to run (defaults to 1)
-    d: (optional)
-        Initial displacement field
-    p: (optional)
-        Initial global displacement model parameters
-    model: ['constant', 'affine', 'eight_param']
-        Optical flow parametrization to use
-    mu: (optional)
-        Weighting term for usage of global parametrization. Defaults to
-        using value recommended in Farneback's thesis
 
     Returns
     -------
@@ -191,46 +182,15 @@ def flow_iterative(
     ).astype(int)
 
     # Initialize displacement field
-    if d is None:
-        d = np.zeros(list(f1.shape) + [2])
+    d = np.zeros(list(f1.shape) + [2])
 
     # Set up applicability convolution window
     n_flow = int(4 * sigma_flow + 1)
     xw = np.arange(-n_flow, n_flow + 1)
     w = np.exp(-(xw**2) / (2 * sigma_flow**2))
 
-    # Evaluate warp parametrization model at pixel coordinates
-    if model == "constant":
-        S = np.eye(2)
-
-    elif model in ("affine", "eight_param"):
-        S = np.empty(list(x.shape) + [6 if model == "affine" else 8])
-
-        S[..., 0, 0] = 1
-        S[..., 0, 1] = x[..., 0]
-        S[..., 0, 2] = x[..., 1]
-        S[..., 0, 3] = 0
-        S[..., 0, 4] = 0
-        S[..., 0, 5] = 0
-
-        S[..., 1, 0] = 0
-        S[..., 1, 1] = 0
-        S[..., 1, 2] = 0
-        S[..., 1, 3] = 1
-        S[..., 1, 4] = x[..., 0]
-        S[..., 1, 5] = x[..., 1]
-
-        if model == "eight_param":
-            S[..., 0, 6] = x[..., 0] ** 2
-            S[..., 0, 7] = x[..., 0] * x[..., 1]
-
-            S[..., 1, 6] = x[..., 0] * x[..., 1]
-            S[..., 1, 7] = x[..., 1] ** 2
-
-    else:
-        raise ValueError("Invalid parametrization model")
-
-    S_T = S.swapaxes(-1, -2)
+    ATA_arr = []
+    ATb_arr = []
 
     # Iterate convolutions to estimate the optical flow
     for _ in range(num_iter):
@@ -252,61 +212,24 @@ def flow_iterative(
         c_ = c1[x_[..., 0], x_[..., 1]]
         c_[off_f] = 0
 
-        # Calculate A and delB for each point, according to paper
+        # Calculate A and delB for each point, according to paper, and add in certainty by applying to A and delB
         A = (A1 + A2[x_[..., 0], x_[..., 1]]) / 2
         A *= c_[
             ..., None, None
-        ]  # recommendation in paper: add in certainty by applying to A and delB
+        ]
 
         delB = -1 / 2 * (B2[x_[..., 0], x_[..., 1]] - B1) + (A @ d_[..., None])[..., 0]
         delB *= c_[
             ..., None
-        ]  # recommendation in paper: add in certainty by applying to A and delB
+        ]
 
         # Pre-calculate quantities recommended by paper
         A_T = A.swapaxes(-1, -2)
-        ATA = S_T @ A_T @ A @ S
-        ATb = (S_T @ A_T @ delB[..., None])[..., 0]
-        # btb = delB.swapaxes(-1, -2) @ delB
-
-        # If mu is 0, it means the global/average parametrized warp should not be
-        # calculated, and the parametrization should apply to the local calculations
-        if mu == 0:
-            # Apply separable cross-correlation to calculate linear equation
-            # for each pixel: G*d = h
-            G = scipy.ndimage.correlate1d(ATA, w, axis=0, mode="constant", cval=0)
-            G = scipy.ndimage.correlate1d(G, w, axis=1, mode="constant", cval=0)
-
-            h = scipy.ndimage.correlate1d(ATb, w, axis=0, mode="constant", cval=0)
-            h = scipy.ndimage.correlate1d(h, w, axis=1, mode="constant", cval=0)
-
-            d = (S @ np.linalg.solve(G, h)[..., None])[..., 0]
-
-        # if mu is not 0, it should be used to regularize the least squares problem
-        # and "force" the background warp onto uncertain pixels
-        else:
-            # Calculate global parametrized warp
-            G_avg = np.mean(ATA, axis=(0, 1))
-            h_avg = np.mean(ATb, axis=(0, 1))
-            p_avg = np.linalg.solve(G_avg, h_avg)
-            d_avg = (S @ p_avg[..., None])[..., 0]
-
-            # Default value for mu is to set mu to 1/2 the trace of G_avg
-            if mu is None:
-                mu = 1 / 2 * np.trace(G_avg)
-
-            # Apply separable cross-correlation to calculate linear equation
-            G = scipy.ndimage.correlate1d(A_T @ A, w, axis=0, mode="constant", cval=0)
-            G = scipy.ndimage.correlate1d(G, w, axis=1, mode="constant", cval=0)
-
-            h = scipy.ndimage.correlate1d(
-                (A_T @ delB[..., None])[..., 0], w, axis=0, mode="constant", cval=0
-            )
-            h = scipy.ndimage.correlate1d(h, w, axis=1, mode="constant", cval=0)
-
-            # Refine estimate of displacement field
-            d = np.linalg.solve(G + mu * np.eye(2), h + mu * d_avg)
-
-    # TODO: return global displacement parameters and/or global displacement if mu != 0
+        ATA = A_T @ A
+        ATb = (A_T @ delB[..., None])[..., 0]
+        ATA_arr.append(ATA)
+        ATb_arr.append(ATb)
+    
+    d = np.linalg.solve(sum(w * ATA_arr), sum(w * ATb_arr))
 
     return d
