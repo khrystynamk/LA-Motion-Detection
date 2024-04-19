@@ -23,17 +23,25 @@ def main():
     # get images to calculate flow for
     # ---------------------------------------------------------------
 
-    yosemite = os.path.join(
-        os.path.dirname(os.path.abspath(__file__)),
-        "data",
-        "yosemite_sequence",
-        "yos{}.tif",
-    )
-    fn1 = yosemite.format(2)
-    fn2 = yosemite.format(4)
+    video_path = "shibuya.mp4"  # Change this to your video path
+    cap = cv2.VideoCapture(video_path)
 
-    f1 = skimage.io.imread(fn1).astype(np.double)
-    f2 = skimage.io.imread(fn2).astype(np.double)
+    ret, frame1 = cap.read()
+    if not ret:
+        print("Error reading video frame")
+        return
+
+    ret, frame2 = cap.read()
+    if not ret:
+        print("Error reading video frame")
+        return
+    
+    gray_prev = cv2.cvtColor(frame1, cv2.COLOR_BGR2GRAY)
+    gray = cv2.cvtColor(frame2, cv2.COLOR_BGR2GRAY)
+
+    # Convert frames to double precision for optical flow calculation
+    f1 = gray_prev.astype(np.double)
+    f2 = gray.astype(np.double)
 
     # certainties for images - certainty is decreased for pixels near the edge
     # of the image, as recommended by Farneback
@@ -61,23 +69,11 @@ def main():
 
     n_pyr = 4
 
-    # # version using perspective warp regularization
-    # # to clean edges
-    # opts = dict(
-    #     sigma=4.0,
-    #     sigma_flow=4.0,
-    #     num_iter=3,
-    #     model="eight_param",
-    #     mu=None,
-    # )
-
     # version using no regularization model
     opts = dict(
         sigma=4.0,
         sigma_flow=4.0,
-        num_iter=3,
-        model="constant",
-        mu=0,
+        num_iter=3
     )
 
     # optical flow field
@@ -158,7 +154,6 @@ def main():
     axes[1, 1].set_title("difference f1 - f2 warped: this implementation")
 
     plt.show()
-
 
 if __name__ == "__main__":
     main()
