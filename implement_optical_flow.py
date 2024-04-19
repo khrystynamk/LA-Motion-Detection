@@ -141,7 +141,7 @@ def poly_exp(f, c, sigma):
 
 
 def flow_iterative(
-    f1, f2, sigma, c1, c2, sigma_flow, num_iter=1
+    f1, f2, sigma, c1, c2, sigma_flow, num_iter=1, d=None
 ):
     """
     Calculates optical flow with an algorithm described by Gunnar Farneback
@@ -162,14 +162,14 @@ def flow_iterative(
         Applicability window Gaussian kernel sigma for polynomial matching
     num_iter
         Number of iterations to run (defaults to 1)
+    d: (optional)
+        Initial displacement field
 
     Returns
     -------
     d
         Optical flow field. d[i, j] is the (y, x) displacement for pixel (i, j)
     """
-
-    # TODO: add initial warp parameters as optional input?
 
     # Calculate the polynomial expansion at each point in the images
     A1, B1, C1 = poly_exp(f1, c1, sigma)
@@ -182,15 +182,17 @@ def flow_iterative(
     ).astype(int)
 
     # Initialize displacement field
-    d = np.zeros(list(f1.shape) + [2])
+    if d is None:
+        d = np.zeros(list(f1.shape) + [2])
 
     # Set up applicability convolution window
     n_flow = int(4 * sigma_flow + 1)
     xw = np.arange(-n_flow, n_flow + 1)
     w = np.exp(-(xw**2) / (2 * sigma_flow**2))
 
-    ATA_arr = []
-    ATb_arr = []
+    # The model is constant by default
+    S = np.eye(2)
+    S_T = S.swapaxes(-1, -2)
 
     # Iterate convolutions to estimate the optical flow
     for _ in range(num_iter):
@@ -212,7 +214,7 @@ def flow_iterative(
         c_ = c1[x_[..., 0], x_[..., 1]]
         c_[off_f] = 0
 
-        # Calculate A and delB for each point, according to paper, and add in certainty by applying to A and delB
+        # Calculate A and delB for each point, according to paper, add in certainty by applying to A and delB
         A = (A1 + A2[x_[..., 0], x_[..., 1]]) / 2
         A *= c_[
             ..., None, None
@@ -225,11 +227,18 @@ def flow_iterative(
 
         # Pre-calculate quantities recommended by paper
         A_T = A.swapaxes(-1, -2)
-        ATA = A_T @ A
-        ATb = (A_T @ delB[..., None])[..., 0]
-        ATA_arr.append(ATA)
-        ATb_arr.append(ATb)
-    
-    d = np.linalg.solve(sum(w * ATA_arr), sum(w * ATb_arr))
+        ATA = S_T @ A_T @ A @ S
+        ATb = (S_T @ A_T @ delB[..., None])[..., 0]
+        # btb = delB.swapaxes(-1, -2) @ delB
+
+        # Apply separable cross-correlation to calculate linear equation
+        # for each pixel: G*d = h
+        G = scipy.ndimage.correlate1d(ATA, w, axis=0, mode="constant", cval=0)
+        G = scipy.ndimage.correlate1d(G, w, axis=1, mode="constant", cval=0)
+
+        h = scipy.ndimage.correlate1d(ATb, w, axis=0, mode="constant", cval=0)
+        h = scipy.ndimage.correlate1d(h, w, axis=1, mode="constant", cval=0)
+
+        d = (S @ np.linalg.solve(G, h)[..., None])[..., 0]
 
     return d
