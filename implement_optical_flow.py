@@ -10,27 +10,17 @@ import matplotlib.pyplot as plt
 
 def poly_exp(f, c, sigma):
     """
-    Calculate the local polynomial expansion of a 2D signal.
+    Compute the local polynomial expansion of a 2D signal.
 
-    $f ~ x^T A x + B^T x + C$
+    Parameters:
+    - f (numpy.ndarray) : Input signal (2D array)
+    - c (float) : Certainty of the signal
+    - sigma (float) : Standard deviation of the applicability Gaussian kernel
 
-    Parameters
-    ----------
-    f
-        Input signal
-    c
-        Certainty of signal
-    sigma
-        Standard deviation of applicability Gaussian kernel
-
-    Returns
-    -------
-    A
-        Quadratic term of polynomial expansion (Symmetric matrix)
-    B
-        Linear term of polynomial expansion (Vector)
-    C
-        Constant term of polynomial expansion (Scalar)
+    Returns:
+    - A (numpy.ndarray) : Quadratic term of the polynomial expansion (Symmetric matrix)
+    - B (numpy.ndarray) : Linear term of the polynomial expansion (Vector)
+    - C (float) : Constant term of the polynomial expansion
     """
 
     # ----- [Equivalent Correlation Kernels section in the paper] -----
@@ -40,10 +30,10 @@ def poly_exp(f, c, sigma):
     x = np.arange(-n, n + 1, dtype=int)
     a = np.exp(-(x**2) / (2 * sigma**2))  # applicability kernel
 
+    # ----- [Estimating the Coefficients of a Polynomial Model] -----
+
     # bx array has a shape determined by the shape of the applicability kernel a 
     # with an additional dimension for the different terms in the polynomial basis
-
-    # ----- [Estimating the Coefficients of a Polynomial Model] -----
     # polynomial basis, {1, x, y, x^2, y^2, xy}
     bx = np.stack(
         [np.ones(a.shape), x, np.ones(a.shape), x**2, np.ones(a.shape), x], axis=-1
@@ -63,6 +53,7 @@ def poly_exp(f, c, sigma):
     cf = c * f # product of the signal and its certainty
 
     # ----- [Cartesian Separability section in the paper] -----
+
     # The goal is to find the coefficients of a second-order polynomial that best fits the local signal.
 
     # G and v are used to calculate "r" from the paper: r = G^(-1)*v -> v = G*r
@@ -71,6 +62,7 @@ def poly_exp(f, c, sigma):
     v = np.empty(list(f.shape) + [bx.shape[-1]])
 
     # ----- [Separable Cross-correlations for X] -----
+
     # einsum does multiplication, summation and transposition faster
     # i,ij->ij A has one axis i, B has 2 axes (i and j) - dimension labels
     ab = np.einsum("i,ij->ij", a, bx) # inner product (a · bm), this can be rewritten as (a[:, np.newaxis] * bx)
@@ -87,6 +79,7 @@ def poly_exp(f, c, sigma):
         )
 
     # ----- [Separable Cross-correlations for Y] -----
+
     ab = np.einsum("i,ij->ij", a, by)
     abb = np.einsum("ij,ik->ijk", ab, by)
 
@@ -118,36 +111,24 @@ def poly_exp(f, c, sigma):
     return A, B, C
 
 
-def flow_iterative(
-    f1, f2, sigma, c1, c2, sigma_flow, num_iter=1, d=None
-):
+def flow_iterative(f1, f2, sigma, c1, c2, sigma_flow, num_iter=1, d=None):
     """
-    Calculates optical flow with an algorithm described by Gunnar Farneback
+    Calculate the Gunnar Farneback optical flow.
 
-    Parameters
-    ----------
-    f1
-        First image
-    f2
-        Second image
-    sigma
-        Polynomial expansion applicability Gaussian kernel sigma
-    c1
-        Certainty of first image
-    c2
-        Certainty of second image
-    sigma_flow
-        Applicability window Gaussian kernel sigma for polynomial matching
-    num_iter
-        Number of iterations to run (defaults to 1)
-    d: (optional)
-        Initial displacement field
+    Parameters:
+    f1 (numpy.ndarray) : First frame
+    f2 (numpy.ndarray) : Second frame
+    sigma (float) : Polynomial expansion applicability Gaussian kernel sigma
+    c1 (numpy.ndarray) : Certainty of first image
+    c2 (numpy.ndarray) : Certainty of second image
+    sigma_flow (float) : Applicability window Gaussian kernel sigma for polynomial matching
+    num_iter (int) : Number of iterations to run (defaults to 1)
+    d (numpy.ndarray) (optional) : Initial displacement field
 
-    Returns
-    -------
-    d
-        Optical flow field. d[i, j] is the (y, x) displacement for pixel (i, j)
+    Returns:
+    d (numpy.ndarray) : Optical flow field. d[i, j] is the (y, x) displacement for pixel (i, j)
     """
+    
     A1, B1, _ = poly_exp(f1, c1, sigma)
     A2, B2, _ = poly_exp(f2, c2, sigma)
 
@@ -210,10 +191,7 @@ def flow_iterative(
 
     return d
 
-def main(video_path):
-    """
-    Compares the built-in CV algorithm with the implemented one.
-    """
+def preprocess_frames(video_path):
     cap = cv2.VideoCapture(video_path)
 
     ret, frame1 = cap.read()
@@ -232,6 +210,14 @@ def main(video_path):
     f1 = gray_prev.astype(np.double)
     f2 = gray.astype(np.double)
 
+    return f1, f2
+
+def main(video_path):
+    """
+    Compares the built-in CV algorithm with the implemented one.
+    """
+    f1, f2 = preprocess_frames(video_path)
+
     c1 = np.minimum(
         1, 1 / 5 * np.minimum(np.arange(f1.shape[0])[:, None], np.arange(f1.shape[1]))
     )
@@ -245,7 +231,7 @@ def main(video_path):
         ),
     )
     c2 = c1
-    pyramid_layers = 4
+    pyramid_layers = 3
     options = dict(
         sigma=4.0,
         sigma_flow=4.0,
@@ -278,7 +264,7 @@ def main(video_path):
         iterations=3,
         poly_n=5,
         poly_sigma=1.2,
-        flags=cv2.OPTFLOW_FARNEBACK_GAUSSIAN,
+        flags=cv2.OPTFLOW_FARNEBACK_GAUSSIAN
     )
 
     flow_field_cv = cv2.calcOpticalFlowFarneback(
