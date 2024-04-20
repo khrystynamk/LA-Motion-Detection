@@ -1,10 +1,12 @@
 import numpy as np
+import sys
 import scipy.ndimage
-
-__all__ = ["__version__", "poly_exp", "flow_iterative"]
-
-
-__version__ = "1.0.0"
+import cv2
+import skimage.io
+import skimage.transform
+from functools import partial
+import matplotlib.pyplot as plt
+from builtin_optical_flow import read_first_frame, release_resources
 
 
 def poly_exp(f, c, sigma):
@@ -242,3 +244,149 @@ def flow_iterative(
         d = (S @ np.linalg.solve(G, h)[..., None])[..., 0]
 
     return d
+
+def main(video_path):
+    """
+    Compares this implementation of Farneback's algorithms to OpenCV's implementation
+    of a similar version of the algorithm
+    """
+
+    # ---------------------------------------------------------------
+    # get images to calculate flow for
+    # ---------------------------------------------------------------
+
+    cap = cv2.VideoCapture(video_path)
+
+    ret, frame1 = cap.read()
+    if not ret:
+        print("Error reading video frame")
+        return
+
+    ret, frame2 = cap.read()
+    if not ret:
+        print("Error reading video frame")
+        return
+    
+    gray_prev = cv2.cvtColor(frame1, cv2.COLOR_BGR2GRAY)
+    gray = cv2.cvtColor(frame2, cv2.COLOR_BGR2GRAY)
+
+    # Convert frames to double precision for optical flow calculation
+    f1 = gray_prev.astype(np.double)
+    f2 = gray.astype(np.double)
+
+    # certainties for images - certainty is decreased for pixels near the edge
+    # of the image, as recommended by Farneback
+
+    # c1 = np.ones_like(f1)
+    # c2 = np.ones_like(f2)
+
+    c1 = np.minimum(
+        1, 1 / 5 * np.minimum(np.arange(f1.shape[0])[:, None], np.arange(f1.shape[1]))
+    )
+    c1 = np.minimum(
+        c1,
+        1
+        / 5
+        * np.minimum(
+            f1.shape[0] - 1 - np.arange(f1.shape[0])[:, None],
+            f1.shape[1] - 1 - np.arange(f1.shape[1]),
+        ),
+    )
+    c2 = c1
+
+    # ---------------------------------------------------------------
+    # calculate optical flow with this algorithm
+    # ---------------------------------------------------------------
+
+    n_pyr = 4
+
+    # version using no regularization model
+    opts = dict(
+        sigma=4.0,
+        sigma_flow=4.0,
+        num_iter=3
+    )
+
+    # optical flow field
+    d = None
+
+    # calculate optical flow using pyramids
+    # note: reversed(...) because we start with the smallest pyramid
+    for pyr1, pyr2, c1_, c2_ in reversed(
+        list(
+            zip(
+                *list(
+                    map(
+                        partial(skimage.transform.pyramid_gaussian, max_layer=n_pyr),
+                        [f1, f2, c1, c2],
+                    )
+                )
+            )
+        )
+    ):
+        if d is not None:
+            d = skimage.transform.pyramid_expand(d, channel_axis=-1)
+            d = d[: pyr1.shape[0], : pyr2.shape[1]] * 2
+
+        d = flow_iterative(pyr1, pyr2, c1=c1_, c2=c2_, d=d, **opts)
+
+    xw = d + np.moveaxis(np.indices(f1.shape), 0, -1)
+
+    # ---------------------------------------------------------------
+    # calculate optical flow with opencv
+    # ---------------------------------------------------------------
+
+    opts_cv = dict(
+        pyr_scale=0.5,
+        levels=6,
+        winsize=25,
+        iterations=10,
+        poly_n=25,
+        poly_sigma=3.0,
+        # flags=0
+        flags=cv2.OPTFLOW_FARNEBACK_GAUSSIAN,
+    )
+
+    d2 = cv2.calcOpticalFlowFarneback(
+        f2.astype(np.uint8), f1.astype(np.uint8), None, **opts_cv
+    )
+    d2 = -d2[..., (1, 0)]
+
+    xw2 = d2 + np.moveaxis(np.indices(f1.shape), 0, -1)
+
+    # ---------------------------------------------------------------
+    # use calculated optical flow to warp images
+    # ---------------------------------------------------------------
+
+    # opencv warped frame
+    f2_w2 = skimage.transform.warp(f2, np.moveaxis(xw2, -1, 0), cval=np.nan)
+
+    # warped frame
+    f2_w = skimage.transform.warp(f2, np.moveaxis(xw, -1, 0), cval=np.nan)
+
+    # ---------------------------------------------------------------
+    # visualize results
+    # ---------------------------------------------------------------
+
+    fig, axes = plt.subplots(2, 2, sharex=True, sharey=True)
+
+    p = 2.0  # percentile of histogram edges to chop off
+    vmin, vmax = np.nanpercentile(f1 - f2, [p, 100 - p])
+    cmap = "gray"
+
+    axes[0, 0].imshow(f1, cmap=cmap)
+    axes[0, 0].set_title("f1 (fixed image)")
+    axes[0, 1].imshow(f2, cmap=cmap)
+    axes[0, 1].set_title("f2 (moving image)")
+    axes[1, 0].imshow(f1 - f2_w2, cmap=cmap, vmin=vmin, vmax=vmax)
+    axes[1, 0].set_title("difference f1 - f2 warped: opencv implementation")
+    axes[1, 1].imshow(f1 - f2_w, cmap=cmap, vmin=vmin, vmax=vmax)
+    axes[1, 1].set_title("difference f1 - f2 warped: this implementation")
+
+    plt.show()
+
+if __name__ == "__main__":
+    if len(sys.argv) != 2:
+        print("Usage: python3 implement_optical_flow.py <video_path>")
+        sys.exit(1)
+    main(sys.argv[1])
