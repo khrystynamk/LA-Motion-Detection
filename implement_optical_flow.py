@@ -7,22 +7,21 @@ import skimage.transform
 from functools import partial
 import matplotlib.pyplot as plt
 
+# ------------------------------
+# Compute the local polynomial expansion of a 2D signal.
+
+#     Parameters:
+#     - f (numpy.ndarray) : Input signal (2D array)
+#     - c (float) : Certainty of the signal
+#     - sigma (float) : Standard deviation of the applicability Gaussian kernel
+
+#     Returns:
+#     - A (numpy.ndarray) : Quadratic term of the polynomial expansion (Symmetric matrix)
+#     - B (numpy.ndarray) : Linear term of the polynomial expansion (Vector)
+#     - C (float) : Constant term of the polynomial expansion
+# ------------------------------
 
 def poly_exp(f, c, sigma):
-    """
-    Compute the local polynomial expansion of a 2D signal.
-
-    Parameters:
-    - f (numpy.ndarray) : Input signal (2D array)
-    - c (float) : Certainty of the signal
-    - sigma (float) : Standard deviation of the applicability Gaussian kernel
-
-    Returns:
-    - A (numpy.ndarray) : Quadratic term of the polynomial expansion (Symmetric matrix)
-    - B (numpy.ndarray) : Linear term of the polynomial expansion (Vector)
-    - C (float) : Constant term of the polynomial expansion
-    """
-
     # ----- [Equivalent Correlation Kernels section in the paper] -----
 
     # Calculate applicability kernel (1D because it is separable, computation is significantly more efficient)
@@ -110,25 +109,25 @@ def poly_exp(f, c, sigma):
 
     return A, B, C
 
+# ------------------------------
+# Calculate the Gunnar Farneback optical flow.
+
+#     Parameters:
+#     f1 (numpy.ndarray) : First frame
+#     f2 (numpy.ndarray) : Second frame
+#     sigma (float) : Polynomial expansion applicability Gaussian kernel sigma
+#     c1 (numpy.ndarray) : Certainty of first image
+#     c2 (numpy.ndarray) : Certainty of second image
+#     sigma_flow (float) : Applicability window Gaussian kernel sigma for polynomial matching
+#     num_iter (int) : Number of iterations to run (defaults to 1)
+#     d (numpy.ndarray) (optional) : Initial displacement field
+
+#     Returns:
+#     d (numpy.ndarray) : Optical flow field. d[i, j] is the (y, x) displacement for pixel (i, j)
+# ------------------------------
 
 def flow_iterative(f1, f2, sigma, c1, c2, sigma_flow, num_iter=1, d=None):
-    """
-    Calculate the Gunnar Farneback optical flow.
 
-    Parameters:
-    f1 (numpy.ndarray) : First frame
-    f2 (numpy.ndarray) : Second frame
-    sigma (float) : Polynomial expansion applicability Gaussian kernel sigma
-    c1 (numpy.ndarray) : Certainty of first image
-    c2 (numpy.ndarray) : Certainty of second image
-    sigma_flow (float) : Applicability window Gaussian kernel sigma for polynomial matching
-    num_iter (int) : Number of iterations to run (defaults to 1)
-    d (numpy.ndarray) (optional) : Initial displacement field
-
-    Returns:
-    d (numpy.ndarray) : Optical flow field. d[i, j] is the (y, x) displacement for pixel (i, j)
-    """
-    
     A1, B1, _ = poly_exp(f1, c1, sigma)
     A2, B2, _ = poly_exp(f2, c2, sigma)
 
@@ -213,9 +212,6 @@ def preprocess_frames(video_path):
     return f1, f2
 
 def main(video_path):
-    """
-    Compares the built-in CV algorithm with the implemented one.
-    """
     f1, f2 = preprocess_frames(video_path)
 
     c1 = np.minimum(
@@ -254,8 +250,8 @@ def main(video_path):
     ):
         if flow_field is not None:
             flow_field = skimage.transform.pyramid_expand(flow_field, channel_axis=-1)
-            flow_field = flow_field[: pyr1.shape[0], : pyr2.shape[1]] * 2
-        flow_field = flow_iterative(pyr1, pyr2, c1=c1_, c2=c2_, d=flow_field, **options)
+            flow_field = flow_field[: f1.shape[0], : f2.shape[1]] * 2
+        flow_field = flow_iterative(f1, f2, c1=c1, c2=c2, d=flow_field, **options)
 
     options_cv = dict(
         pyr_scale=0.5,
