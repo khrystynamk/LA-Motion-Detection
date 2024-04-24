@@ -6,6 +6,7 @@ import skimage.io
 import skimage.transform
 from functools import partial
 import matplotlib.pyplot as plt
+import scipy.fftpack, scipy.fft
 
 # ------------------------------
 # Compute the local polynomial expansion of a 2D signal.
@@ -64,33 +65,37 @@ def poly_exp(f, c, sigma):
 
     # einsum does multiplication, summation and transposition faster
     # i,ij->ij A has one axis i, B has 2 axes (i and j) - dimension labels
-    ab = np.einsum("i,ij->ij", a, bx) # inner product (a · bm), this can be rewritten as (a[:, np.newaxis] * bx)
-    abb = np.einsum("ij,ik->ijk", ab, bx) # inner product (a · bm, bm), this can be rewritten as abb = np.matmul(ab[:, :, None], bx[:, None, :]) or ab[:, :, None] @ bx[:, None, :], where @ is shortcut for matmul
 
+    # ab = np.einsum("i,ij->ij", a, bx)
+    ab = (a[:, np.newaxis] * bx)
+    # abb = np.einsum("ij,ik->ijk", ab, bx)
+    abb = ab[:, :, None] @ bx[:, None, :]
+
+    # Calculate G and v for each pixel with convolution
     for i in range(bx.shape[-1]):
         for j in range(bx.shape[-1]):
-            G[..., i, j] = scipy.ndimage.correlate1d(
-                c, abb[..., i, j], axis=0, mode="constant", cval=0 # The input is extended by filling all values beyond the edge with cval
-            ) # [..., i, j] is a shortcut to indicate that all axes preceding or following it should be fully included
+            G[..., i, j] = scipy.ndimage.convolve1d(c, abb[..., i, j], axis=0, mode="constant", cval=0) # abb[..., i, j] - filter wights
+            # G[..., i, j] = scipy.signal.filtfilt(abb[..., i, j], 1, c, axis = 0, padtype="constant")
+        v[..., i] = scipy.ndimage.convolve1d(cf, ab[..., i], axis=0, mode="constant", cval=0) # ab[..., i] - filter weights
+        # v[..., i] = scipy.signal.filtfilt(ab[..., i], 1, cf, axis = 0, padtype="constant")
 
-        v[..., i] = scipy.ndimage.correlate1d(
-            cf, ab[..., i], axis=0, mode="constant", cval=0
-        )
+    # ab = np.einsum("i,ij->ij", a, by)
+    ab = (a[:, np.newaxis] * by)
+    # abb = np.einsum("ij,ik->ijk", ab, by)
+    abb = ab[:, :, None] @ by[:, None, :]
 
-    # ----- [Separable Cross-correlations for Y] -----
-
-    ab = np.einsum("i,ij->ij", a, by)
-    abb = np.einsum("ij,ik->ijk", ab, by)
-
+    # Calculate G and v for each pixel with convolution
     for i in range(bx.shape[-1]):
         for j in range(bx.shape[-1]):
-            G[..., i, j] = scipy.ndimage.correlate1d(
+            G[..., i, j] = scipy.ndimage.convolve1d(
                 G[..., i, j], abb[..., i, j], axis=1, mode="constant", cval=0
             )
+            # G[..., i, j] = scipy.signal.filtfilt(abb[..., i, j], 1, G[..., i, j], axis = 1, padtype="constant")
 
-        v[..., i] = scipy.ndimage.correlate1d(
+        v[..., i] = scipy.ndimage.convolve1d(
             v[..., i], ab[..., i], axis=1, mode="constant", cval=0
         )
+        # v[..., i] = scipy.signal.filtfilt(ab[..., i], 1, v[..., i], axis = 1, padtype="constant")
     r = np.linalg.solve(G, v)
 
     # ----- [Estimating the Coefficients of a Polynomial Model section in the paper] -----
@@ -150,11 +155,12 @@ def flow_iterative(f1, f2, sigma, c1, c2, sigma_flow, num_iter=1, d=None):
     S_T = S.swapaxes(-1, -2)
 
     for _ in range(num_iter):
-        # Set d~ as displacement field fit to nearest pixel (and constrain to not being off image)
+        # d~ - displacement field fit to nearest pixel
         d_ = d.astype(int)
         x_ = x + d_
 
-        # Constrain d~ to be on-image, and find points that would have been off-image
+        # Constrain d~ to be on-image
+        # Find points that would have been off-image
         x_2 = np.maximum(np.minimum(x_, np.array(f1.shape) - 1), 0)
         off_f = np.any(x_ != x_2, axis=-1)
         x_ = x_2
@@ -178,13 +184,12 @@ def flow_iterative(f1, f2, sigma, c1, c2, sigma_flow, num_iter=1, d=None):
         ATA = S_T @ A_T @ A @ S
         ATb = (S_T @ A_T @ delB[..., None])[..., 0]
 
-        # Apply separable cross-correlation to calculate linear equation
-        # for each pixel: G*d = h
-        G = scipy.ndimage.correlate1d(ATA, w, axis=0, mode="constant", cval=0)
-        G = scipy.ndimage.correlate1d(G, w, axis=1, mode="constant", cval=0)
+        # Apply convolution to calculate linear equation for each pixel: G*d = h
+        G = scipy.ndimage.convolve1d(ATA, w, axis=0, mode="constant", cval=0)
+        G = scipy.ndimage.convolve1d(G, w, axis=1, mode="constant", cval=0)
 
-        h = scipy.ndimage.correlate1d(ATb, w, axis=0, mode="constant", cval=0)
-        h = scipy.ndimage.correlate1d(h, w, axis=1, mode="constant", cval=0)
+        h = scipy.ndimage.convolve1d(ATb, w, axis=0, mode="constant", cval=0)
+        h = scipy.ndimage.convolve1d(h, w, axis=1, mode="constant", cval=0)
 
         d = (S @ np.linalg.solve(G, h)[..., None])[..., 0]
 
@@ -227,7 +232,7 @@ def main(video_path):
         ),
     )
     c2 = c1
-    pyramid_layers = 3
+    pyramid_layers = 5
     options = dict(
         sigma=4.0,
         sigma_flow=4.0,
@@ -235,7 +240,7 @@ def main(video_path):
     )
     flow_field = None
 
-    # start with the top (smallest) layer in the pyramid
+    # start with the top, smallest layer in the pyramid
     for pyr1, pyr2, c1_, c2_ in reversed(
         list(
             zip(
@@ -250,8 +255,8 @@ def main(video_path):
     ):
         if flow_field is not None:
             flow_field = skimage.transform.pyramid_expand(flow_field, channel_axis=-1)
-            flow_field = flow_field[: f1.shape[0], : f2.shape[1]] * 2
-        flow_field = flow_iterative(f1, f2, c1=c1, c2=c2, d=flow_field, **options)
+            flow_field = flow_field[: pyr1.shape[0], : pyr2.shape[1]] * 2
+        flow_field = flow_iterative(pyr1, pyr1, c1=c1_, c2=c2_, d=flow_field, **options)
 
     options_cv = dict(
         pyr_scale=0.5,
