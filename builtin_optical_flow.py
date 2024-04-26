@@ -119,7 +119,7 @@ def release_resources(cap):
     cv.destroyAllWindows()
 
 def main(video_path):
-    cap, prev_gray, mask = read_first_frame(video_path)
+    cap, prev_gray = read_first_frame(video_path)
     # cap, prev_gray = read_first_frame(0)
     optical_flow_detection(cap, prev_gray)
     release_resources(cap)
