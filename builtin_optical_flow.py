@@ -107,6 +107,7 @@ def optical_flow_detection(cap, prev_gray):
         cv.imshow('contours_both', frame_with_both_contours)
 
         cv.imshow('flow', draw_flow(gray, flow))
+        cv.imshow('flowPCA', draw_flow(gray, flow_pca))
         # cv.imshow('flow HSV', draw_hsv(flow))
 
         prev_gray = gray
