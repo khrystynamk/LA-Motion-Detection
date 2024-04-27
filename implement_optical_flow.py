@@ -6,7 +6,8 @@ import skimage.io
 import skimage.transform
 from functools import partial
 import matplotlib.pyplot as plt
-import scipy.fftpack, scipy.fft
+import scipy.fftpack, scipy.fft, scipy.signal
+from builtin_optical_flow import draw_contours, draw_flow, draw_hsv
 
 # ------------------------------
 # Compute the local polynomial expansion of a 2D signal.
@@ -45,13 +46,20 @@ def poly_exp(f, c, sigma):
     abbx = abx[:, :, None] * bx[:, None, :]
     abby = aby[:, :, None] * by[:, None, :]
 
+    # for i in range(bx.shape[-1]):
+    #     for j in range(bx.shape[-1]):
+    #         G[..., i, j] = scipy.ndimage.convolve1d(c, abbx[..., i, j][::-1], axis=0, cval=0)
+    #         G[..., i, j] = scipy.ndimage.convolve1d(G[..., i, j], abby[..., i, j][::-1], axis=1, cval=0)
+
+    #     v[..., i] = scipy.ndimage.convolve1d(cf, abx[..., i][::-1], axis=0, cval=0)
+    #     v[..., i] = scipy.ndimage.convolve1d(v[..., i], aby[..., i][::-1], axis=1, cval=0)
+
     for i in range(bx.shape[-1]):
         for j in range(bx.shape[-1]):
-            G[..., i, j] = scipy.ndimage.convolve1d(c, abbx[..., i, j][::-1], axis=0, cval=0)
-            G[..., i, j] = scipy.ndimage.convolve1d(G[..., i, j], abby[..., i, j][::-1], axis=1, cval=0)
-
-        v[..., i] = scipy.ndimage.convolve1d(cf, abx[..., i][::-1], axis=0, cval=0)
-        v[..., i] = scipy.ndimage.convolve1d(v[..., i], aby[..., i][::-1], axis=1, cval=0)
+            G[..., i, j] = scipy.signal.filtfilt(abbx[..., i, j], 1, c, axis = 0, padtype="constant")
+            G[..., i, j] = scipy.signal.filtfilt(abby[..., i, j][::-1], 1, G[..., i, j], axis = 1, padtype="constant")
+        v[..., i] = scipy.signal.filtfilt(abx[..., i][::-1], 1, cf, axis = 0, padtype="constant")
+        v[..., i] = scipy.signal.filtfilt(aby[..., i], 1, v[..., i], axis = 1, padtype="constant")
 
     r = np.linalg.solve(G, v)
 
@@ -141,11 +149,17 @@ def flow_iterative(f1, f2, sigma, c1, c2, sigma_flow, num_iter=1, d=None):
         ATb = (S_T @ A_T @ delB[..., None])[..., 0]
 
         # Apply convolution to calculate linear equation for each pixel: G*d = h
-        G = scipy.ndimage.convolve1d(ATA, w, axis=0, cval=0)
-        G = scipy.ndimage.convolve1d(G, w, axis=1, cval=0)
+        G = scipy.signal.filtfilt(w, 1, ATA, axis = 0, padtype="constant")
+        G = scipy.signal.filtfilt(w, 1, G, axis = 1, padtype="constant")
+        lambda_ = 1e-5
+        G += lambda_ * np.eye(G.shape[-1])
+        # G = scipy.ndimage.convolve1d(ATA, w, axis=0, cval=0)
+        # G = scipy.ndimage.convolve1d(G, w, axis=1, cval=0)
 
-        h = scipy.ndimage.convolve1d(ATb, w, axis=0, cval=0)
-        h = scipy.ndimage.convolve1d(h, w, axis=1, cval=0)
+        h = scipy.signal.filtfilt(w, 1, ATb, axis = 0, padtype="constant")
+        h = scipy.signal.filtfilt(w, 1, h, axis = 1, padtype="constant")
+        # h = scipy.ndimage.convolve1d(ATb, w, axis=0, cval=0)
+        # h = scipy.ndimage.convolve1d(h, w, axis=1, cval=0)
 
         d = (S @ np.linalg.solve(G, h)[..., None])[..., 0]
 
@@ -172,82 +186,95 @@ def preprocess_frames(video_path):
 
     return f1, f2
 
+def process_video_frames(video_path):
+    cap = cv2.VideoCapture(video_path)
+    frames = []
+
+    while True:
+        ret, frame = cap.read()
+        if not ret:
+            break
+        frames.append(frame)
+
+    cap.release()
+    return frames
+
+def apply_pca_to_flow(flow_reshaped):
+        from sklearn.preprocessing import StandardScaler
+        from sklearn.decomposition import PCA
+        std_scaler = StandardScaler()
+        scaled_flow = std_scaler.fit_transform(flow_reshaped)
+        
+        pca = PCA(n_components=2)
+        pca.fit(scaled_flow)
+        print(sum(pca.explained_variance_ratio_))
+
+        reconstructed_flow = pca.inverse_transform(pca.transform(scaled_flow))
+
+        return reconstructed_flow.reshape(flow_reshaped.shape)
+
 def main(video_path):
-    f1, f2 = preprocess_frames(video_path)
+    frames = process_video_frames(video_path)
+    # f1, f2 = preprocess_frames(video_path)
 
-    c1 = np.minimum(
-        1, 1 / 5 * np.minimum(np.arange(f1.shape[0])[:, None], np.arange(f1.shape[1]))
-    )
-    c1 = np.minimum(
-        c1,
-        1
-        / 5
-        * np.minimum(
-            f1.shape[0] - 1 - np.arange(f1.shape[0])[:, None],
-            f1.shape[1] - 1 - np.arange(f1.shape[1]),
-        ),
-    )
-    c2 = c1
-    pyramid_layers = 1
-    options = dict(
-        sigma=4.0,
-        sigma_flow=4.0,
-        num_iter=3
-    )
-    flow_field = None
+    for i in range(len(frames) - 1):
+        frame1 = frames[i]
+        frame2 = frames[i + 1]
+        gray_prev = cv2.cvtColor(frame1, cv2.COLOR_BGR2GRAY)
+        gray = cv2.cvtColor(frame2, cv2.COLOR_BGR2GRAY)
 
-    for pyr1, pyr2, c1_, c2_ in reversed(
-        list(
-            zip(
-                *list(
-                    map(
-                        partial(skimage.transform.pyramid_gaussian, max_layer=pyramid_layers),
-                        [f1, f2, c1, c2],
-                    )
-                )
-            )
+        f1 = gray_prev.astype(np.double)
+        f2 = gray.astype(np.double)
+
+        c1 = np.minimum(
+            1, 1 / 5 * np.minimum(np.arange(f1.shape[0])[:, None], np.arange(f1.shape[1]))
         )
-    ):
+        c1 = np.minimum(
+            c1,
+            1
+            / 5
+            * np.minimum(
+                f1.shape[0] - 1 - np.arange(f1.shape[0])[:, None],
+                f1.shape[1] - 1 - np.arange(f1.shape[1]),
+            ),
+        )
+        c2 = c1
+        pyramid_layers = 4
+        options = dict(
+            sigma=4.0,
+            sigma_flow=4.0,
+            num_iter=3
+        )
+        flow_field = None
+
+        # for pyr1, pyr2, c1_, c2_ in reversed(
+        #     list(
+        #         zip(
+        #             *list(
+        #                 map(
+        #                     partial(skimage.transform.pyramid_gaussian, max_layer=pyramid_layers),
+        #                     [f1, f2, c1, c2],
+        #                 )
+        #             )
+        #         )
+        #     )
+        # ):
         if flow_field is not None:
             flow_field = skimage.transform.pyramid_expand(flow_field, channel_axis=-1)
-            flow_field = flow_field[: pyr1.shape[0], : pyr2.shape[1]] * 2
-        flow_field = flow_iterative(pyr1, pyr2, c1=c1_, c2=c2_, d=flow_field, **options)
+            flow_field = flow_field[: f1.shape[0], : f2.shape[1]] * 2
+        flow_field = flow_iterative(f1, f2, c1=c1, c2=c2, d=flow_field, **options)
 
-    options_cv = dict(
-        pyr_scale=0.5,
-        levels=4,
-        winsize=15,
-        iterations=3,
-        poly_n=5,
-        poly_sigma=1.2,
-        flags=cv2.OPTFLOW_FARNEBACK_GAUSSIAN
-    )
+        flow_reshaped = flow_field.reshape(-1, 2)
+        flow_pca = apply_pca_to_flow(flow_reshaped).reshape(flow_field.shape)
+        print(flow_pca)
+        frame_out = draw_contours(flow_pca, frame2)
+        # frame_out = draw_hsv(flow_pca)
+        # frame_out = draw_flow(gray, flow_pca)
+        # frame_out = draw_contours(flow_field, frame2)
 
-    flow_field_cv = cv2.calcOpticalFlowFarneback(
-        f2.astype(np.uint8), f1.astype(np.uint8), None, **options_cv
-    )
-    flow_field_cv = -flow_field_cv[..., (1, 0)]
-
-    # warped frames
-    xw = flow_field + np.moveaxis(np.indices(f1.shape), 0, -1)
-    xw2 = flow_field_cv + np.moveaxis(np.indices(f1.shape), 0, -1)
-    f2_w2 = skimage.transform.warp(f2, np.moveaxis(xw2, -1, 0), cval=np.nan)
-    f2_w = skimage.transform.warp(f2, np.moveaxis(xw, -1, 0), cval=np.nan)
-
-    _, axes = plt.subplots(2, 2, sharex=True, sharey=True)
-    p = 2.0
-    vmin, vmax = np.nanpercentile(f1 - f2, [p, 100 - p])
-
-    axes[0, 0].imshow(f1, cmap="gray")
-    axes[0, 0].set_title("f1 Origin Image)")
-    axes[0, 1].imshow(f2, cmap="gray")
-    axes[0, 1].set_title("f2 Moving Image")
-    axes[1, 0].imshow(f1 - f2_w2, cmap="gray", vmin=vmin, vmax=vmax)
-    axes[1, 0].set_title("f1 - f2 Opencv")
-    axes[1, 1].imshow(f1 - f2_w, cmap="gray", vmin=vmin, vmax=vmax)
-    axes[1, 1].set_title("f1 - f2 Our implementation")
-
-    plt.show()
+        filename = f'contours_pca_{i}.jpg'
+        print(f"Saving {filename}")
+        cv2.imwrite(filename, frame_out)
 
 if __name__ == "__main__":
     if len(sys.argv) != 2:
