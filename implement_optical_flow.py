@@ -147,6 +147,8 @@ def flow_iterative(f1, f2, sigma, c1, c2, sigma_flow, num_iter=1, d=None):
         h = scipy.ndimage.convolve1d(ATb, w, axis=0, cval=0)
         h = scipy.ndimage.convolve1d(h, w, axis=1, cval=0)
 
+        lambda_ = 1e-5
+        G += lambda_ * np.eye(G.shape[-1])
         d = (S @ np.linalg.solve(G, h)[..., None])[..., 0]
 
     return d
