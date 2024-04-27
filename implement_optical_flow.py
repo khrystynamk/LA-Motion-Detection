@@ -25,9 +25,15 @@ from builtin_optical_flow import draw_contours, draw_flow, draw_hsv
 
 
 def poly_exp(f, c, sigma):
+
+    # ----- [Equivalent Correlation Kernels section in the paper section in the paper] -----
+
+    # Calculate applicability kernel (1D because it is separable, computation is significantly more efficient)
     n = int(4 * sigma + 1)
     x = np.arange(-n, n + 1, dtype=int)
-    a = np.exp(-(x**2) / (2 * sigma**2))
+    a = np.exp(-(x**2) / (2 * sigma**2)) # applicability kernel
+
+    # ----- [Estimating the Coefficients of a Polynomial Model section in the paper] -----
 
     bx = np.stack(
         [np.ones(a.shape), x, np.ones(a.shape), x**2, np.ones(a.shape), x], axis=-1
@@ -46,6 +52,8 @@ def poly_exp(f, c, sigma):
     abbx = abx[:, :, None] * bx[:, None, :]
     abby = aby[:, :, None] * by[:, None, :]
 
+    # ----- [Normalized Differential Convolution section in the paper] -----
+
     # for i in range(bx.shape[-1]):
     #     for j in range(bx.shape[-1]):
     #         G[..., i, j] = scipy.ndimage.convolve1d(c, abbx[..., i, j][::-1], axis=0, cval=0)
@@ -63,17 +71,19 @@ def poly_exp(f, c, sigma):
 
     r = np.linalg.solve(G, v)
 
+    # ----- [Estimating the Coefficients of a Polynomial Model section in the paper] -----
+
     A = np.empty(list(f.shape) + [2, 2])
-    A[..., 0, 0] = r[..., 3]
-    A[..., 0, 1] = r[..., 5] / 2
-    A[..., 1, 0] = A[..., 0, 1]
-    A[..., 1, 1] = r[..., 4]
+    A[..., 0, 0] = r[..., 3] # r_4
+    A[..., 0, 1] = r[..., 5] / 2 # r_6 / 2
+    A[..., 1, 0] = A[..., 0, 1] # r_6 / 2
+    A[..., 1, 1] = r[..., 4] # r_5
 
     B = np.empty(list(f.shape) + [2])
-    B[..., 0] = r[..., 1]
-    B[..., 1] = r[..., 2]
+    B[..., 0] = r[..., 1] # r_2
+    B[..., 1] = r[..., 2] # r_3
 
-    C = r[..., 0]
+    C = r[..., 0] # r_1
 
     return A, B, C
 
