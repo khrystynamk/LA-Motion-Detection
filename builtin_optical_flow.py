@@ -93,7 +93,6 @@ def optical_flow_detection(cap, prev_gray):
         if not ret:
             break
 
-        # cv.imshow("input", frame)
         gray = cv.cvtColor(frame, cv.COLOR_BGR2GRAY)
         flow = cv.calcOpticalFlowFarneback(prev_gray, gray, None, 0.5, 3, 15, 3, 5, 1.2, 0)
 
@@ -104,15 +103,15 @@ def optical_flow_detection(cap, prev_gray):
         flow_reshaped = flow.reshape(-1, 2)
         flow_pca = apply_pca_to_flow(flow_reshaped).reshape(flow.shape)
         frame_with_both_contours = draw_contours(flow_pca, frame_with_contours, (28, 227, 190))
-        cv.imshow('contours_both', frame_with_both_contours)
 
-        cv.imshow('flow', draw_flow(gray, flow))
-        cv.imshow('flowPCA', draw_flow(gray, flow_pca))
-        # cv.imshow('flow HSV', draw_hsv(flow))
+        cv.imshow('vectors_flow', draw_flow(gray, flow))
+        cv.imshow('vectors_flowPCA', draw_flow(gray, flow_pca))
+        cv.imshow('contours_both', frame_with_both_contours)
+        cv.imshow('hsv_flow', draw_hsv(flow))
+        cv.imshow('hsv_flowPCA', draw_hsv(flow_pca))
 
         prev_gray = gray
 
-        # Frames are read by intervals of 1 millisecond
         if cv.waitKey(1) & 0xFF == ord('q'):
             break
 
