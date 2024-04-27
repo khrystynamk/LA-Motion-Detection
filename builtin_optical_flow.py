@@ -56,8 +56,8 @@ def draw_hsv(flow):
 # Funtion is used to draw contours (boxes) around moving objects.
 # --------------------------------
 
-def draw_contours(flow, frame):
-
+def draw_contours(flow, frame, color):
+    
     magnitude, _ = cv.cartToPolar(flow[..., 0], flow[..., 1])
     magnitude = cv.normalize(magnitude, None, 0, 255, cv.NORM_MINMAX)
     magnitude = magnitude.astype(np.uint8)
@@ -66,11 +66,10 @@ def draw_contours(flow, frame):
     contours, _ = cv.findContours(thresholded_mag, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE)
     min_contour_area = 500
     large_contours = [cnt for cnt in contours if cv.contourArea(cnt) > min_contour_area]
-    frame_out = frame.copy()
     for cnt in large_contours:
         x, y, w, h = cv.boundingRect(cnt)
-        frame_out = cv.rectangle(frame, (x, y), (x+w, y+h), (227, 28, 190), 3)
-    return frame_out
+        cv.rectangle(frame, (x, y), (x + w, y + h), color, 3)
+    return frame
 
 # --------------------------------
 # Funtion is used to calcOpticalFlowFarneback
@@ -98,7 +97,15 @@ def optical_flow_detection(cap, prev_gray):
         gray = cv.cvtColor(frame, cv.COLOR_BGR2GRAY)
         flow = cv.calcOpticalFlowFarneback(prev_gray, gray, None, 0.5, 3, 15, 3, 5, 1.2, 0)
 
-        cv.imshow('contours', draw_contours(flow, frame))
+        # Draw contours with default flow
+        frame_with_contours = draw_contours(flow, frame.copy(), (227, 28, 190))
+
+        # Apply PCA and draw contours with PCA flow
+        flow_reshaped = flow.reshape(-1, 2)
+        flow_pca = apply_pca_to_flow(flow_reshaped).reshape(flow.shape)
+        frame_with_both_contours = draw_contours(flow_pca, frame_with_contours, (28, 227, 190))
+        cv.imshow('contours_both', frame_with_both_contours)
+
         cv.imshow('flow', draw_flow(gray, flow))
         # cv.imshow('flow HSV', draw_hsv(flow))
 
