@@ -109,11 +109,6 @@ def optical_flow_detection(cap, prev_gray):
         cv.imshow('flow', draw_flow(gray, flow))
         # cv.imshow('flow HSV', draw_hsv(flow))
 
-        flow_reshaped = flow.reshape(-1, 2)
-        flow_pca = apply_pca_to_flow(flow_reshaped).reshape(flow.shape)
-        cv.imshow('flow pca', draw_flow(gray, flow_pca))
-        cv.imshow('contours_pca', draw_contours(flow_pca, frame))
-
         prev_gray = gray
 
         # Frames are read by intervals of 1 millisecond
