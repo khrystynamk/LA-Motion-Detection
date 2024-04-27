@@ -22,97 +22,53 @@ import scipy.fftpack, scipy.fft
 #     - C (float) : Constant term of the polynomial expansion
 # ------------------------------
 
-def poly_exp(f, c, sigma):
-    # ----- [Equivalent Correlation Kernels section in the paper] -----
 
-    # Calculate applicability kernel (1D because it is separable, computation is significantly more efficient)
+def poly_exp(f, c, sigma):
     n = int(4 * sigma + 1)
     x = np.arange(-n, n + 1, dtype=int)
-    a = np.exp(-(x**2) / (2 * sigma**2))  # applicability kernel
+    a = np.exp(-(x**2) / (2 * sigma**2))
 
-    # ----- [Estimating the Coefficients of a Polynomial Model] -----
-
-    # bx array has a shape determined by the shape of the applicability kernel a 
-    # with an additional dimension for the different terms in the polynomial basis
-    # polynomial basis, {1, x, y, x^2, y^2, xy}
     bx = np.stack(
         [np.ones(a.shape), x, np.ones(a.shape), x**2, np.ones(a.shape), x], axis=-1
     )
     by = np.stack(
-        [
-            np.ones(a.shape),
-            np.ones(a.shape),
-            x,
-            np.ones(a.shape),
-            x**2,
-            x,
-        ],
-        axis=-1,
+        [np.ones(a.shape), np.ones(a.shape), x, np.ones(a.shape), x**2, x], axis=-1
     )
 
-    cf = c * f # product of the signal and its certainty
+    cf = c * f
 
-    # ----- [Cartesian Separability section in the paper] -----
-
-    # The goal is to find the coefficients of a second-order polynomial that best fits the local signal.
-
-    # G and v are used to calculate "r" from the paper: r = G^(-1)*v -> v = G*r
-    # r is the parametrization of the 2nd order polynomial for f
     G = np.empty(list(f.shape) + [bx.shape[-1]] * 2)
     v = np.empty(list(f.shape) + [bx.shape[-1]])
 
-    # ----- [Separable Cross-correlations for X] -----
+    abx = a[:, np.newaxis] * bx
+    aby = a[:, np.newaxis] * by
+    abbx = abx[:, :, None] * bx[:, None, :]
+    abby = aby[:, :, None] * by[:, None, :]
 
-    # einsum does multiplication, summation and transposition faster
-    # i,ij->ij A has one axis i, B has 2 axes (i and j) - dimension labels
-
-    # ab = np.einsum("i,ij->ij", a, bx)
-    ab = (a[:, np.newaxis] * bx)
-    # abb = np.einsum("ij,ik->ijk", ab, bx)
-    abb = ab[:, :, None] @ bx[:, None, :]
-
-    # Calculate G and v for each pixel with convolution
     for i in range(bx.shape[-1]):
         for j in range(bx.shape[-1]):
-            G[..., i, j] = scipy.ndimage.convolve1d(c, abb[..., i, j], axis=0, mode="constant", cval=0) # abb[..., i, j] - filter wights
-            # G[..., i, j] = scipy.signal.filtfilt(abb[..., i, j], 1, c, axis = 0, padtype="constant")
-        v[..., i] = scipy.ndimage.convolve1d(cf, ab[..., i], axis=0, mode="constant", cval=0) # ab[..., i] - filter weights
-        # v[..., i] = scipy.signal.filtfilt(ab[..., i], 1, cf, axis = 0, padtype="constant")
+            G[..., i, j] = scipy.ndimage.convolve1d(c, abbx[..., i, j][::-1], axis=0, cval=0)
+            G[..., i, j] = scipy.ndimage.convolve1d(G[..., i, j], abby[..., i, j][::-1], axis=1, cval=0)
 
-    # ab = np.einsum("i,ij->ij", a, by)
-    ab = (a[:, np.newaxis] * by)
-    # abb = np.einsum("ij,ik->ijk", ab, by)
-    abb = ab[:, :, None] @ by[:, None, :]
+        v[..., i] = scipy.ndimage.convolve1d(cf, abx[..., i][::-1], axis=0, cval=0)
+        v[..., i] = scipy.ndimage.convolve1d(v[..., i], aby[..., i][::-1], axis=1, cval=0)
 
-    # Calculate G and v for each pixel with convolution
-    for i in range(bx.shape[-1]):
-        for j in range(bx.shape[-1]):
-            G[..., i, j] = scipy.ndimage.convolve1d(
-                G[..., i, j], abb[..., i, j], axis=1, mode="constant", cval=0
-            )
-            # G[..., i, j] = scipy.signal.filtfilt(abb[..., i, j], 1, G[..., i, j], axis = 1, padtype="constant")
-
-        v[..., i] = scipy.ndimage.convolve1d(
-            v[..., i], ab[..., i], axis=1, mode="constant", cval=0
-        )
-        # v[..., i] = scipy.signal.filtfilt(ab[..., i], 1, v[..., i], axis = 1, padtype="constant")
     r = np.linalg.solve(G, v)
 
-    # ----- [Estimating the Coefficients of a Polynomial Model section in the paper] -----
-
     A = np.empty(list(f.shape) + [2, 2])
-    A[..., 0, 0] = r[..., 3] # r_4
-    A[..., 0, 1] = r[..., 5] / 2 # r_6 / 2
-    A[..., 1, 0] = A[..., 0, 1] # r_6 / 2
-    A[..., 1, 1] = r[..., 4] # r_5
+    A[..., 0, 0] = r[..., 3]
+    A[..., 0, 1] = r[..., 5] / 2
+    A[..., 1, 0] = A[..., 0, 1]
+    A[..., 1, 1] = r[..., 4]
 
     B = np.empty(list(f.shape) + [2])
-    B[..., 0] = r[..., 1] # r_2
-    B[..., 1] = r[..., 2] # r_3
+    B[..., 0] = r[..., 1]
+    B[..., 1] = r[..., 2]
 
-    C = r[..., 0] # r_1
+    C = r[..., 0]
 
     return A, B, C
+
 
 # ------------------------------
 # Calculate the Gunnar Farneback optical flow.
@@ -185,11 +141,11 @@ def flow_iterative(f1, f2, sigma, c1, c2, sigma_flow, num_iter=1, d=None):
         ATb = (S_T @ A_T @ delB[..., None])[..., 0]
 
         # Apply convolution to calculate linear equation for each pixel: G*d = h
-        G = scipy.ndimage.convolve1d(ATA, w, axis=0, mode="constant", cval=0)
-        G = scipy.ndimage.convolve1d(G, w, axis=1, mode="constant", cval=0)
+        G = scipy.ndimage.convolve1d(ATA, w, axis=0, cval=0)
+        G = scipy.ndimage.convolve1d(G, w, axis=1, cval=0)
 
-        h = scipy.ndimage.convolve1d(ATb, w, axis=0, mode="constant", cval=0)
-        h = scipy.ndimage.convolve1d(h, w, axis=1, mode="constant", cval=0)
+        h = scipy.ndimage.convolve1d(ATb, w, axis=0, cval=0)
+        h = scipy.ndimage.convolve1d(h, w, axis=1, cval=0)
 
         d = (S @ np.linalg.solve(G, h)[..., None])[..., 0]
 
@@ -232,7 +188,7 @@ def main(video_path):
         ),
     )
     c2 = c1
-    pyramid_layers = 5
+    pyramid_layers = 1
     options = dict(
         sigma=4.0,
         sigma_flow=4.0,
@@ -240,7 +196,6 @@ def main(video_path):
     )
     flow_field = None
 
-    # start with the top, smallest layer in the pyramid
     for pyr1, pyr2, c1_, c2_ in reversed(
         list(
             zip(
@@ -256,7 +211,7 @@ def main(video_path):
         if flow_field is not None:
             flow_field = skimage.transform.pyramid_expand(flow_field, channel_axis=-1)
             flow_field = flow_field[: pyr1.shape[0], : pyr2.shape[1]] * 2
-        flow_field = flow_iterative(pyr1, pyr1, c1=c1_, c2=c2_, d=flow_field, **options)
+        flow_field = flow_iterative(pyr1, pyr2, c1=c1_, c2=c2_, d=flow_field, **options)
 
     options_cv = dict(
         pyr_scale=0.5,
@@ -284,13 +239,13 @@ def main(video_path):
     vmin, vmax = np.nanpercentile(f1 - f2, [p, 100 - p])
 
     axes[0, 0].imshow(f1, cmap="gray")
-    axes[0, 0].set_title("f1 (fixed image)")
+    axes[0, 0].set_title("f1 Origin Image)")
     axes[0, 1].imshow(f2, cmap="gray")
-    axes[0, 1].set_title("f2 (moving image)")
+    axes[0, 1].set_title("f2 Moving Image")
     axes[1, 0].imshow(f1 - f2_w2, cmap="gray", vmin=vmin, vmax=vmax)
-    axes[1, 0].set_title("f1 - f2 warped (opencv)")
+    axes[1, 0].set_title("f1 - f2 Opencv")
     axes[1, 1].imshow(f1 - f2_w, cmap="gray", vmin=vmin, vmax=vmax)
-    axes[1, 1].set_title("f1 - f2 warped (implementation)")
+    axes[1, 1].set_title("f1 - f2 Our implementation")
 
     plt.show()
 

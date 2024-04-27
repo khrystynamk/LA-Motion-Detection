@@ -1,6 +1,8 @@
 import cv2 as cv
 import numpy as np
 import sys
+from sklearn.preprocessing import StandardScaler
+from sklearn.decomposition import PCA
 
 def read_first_frame(video_path):
     cap = cv.VideoCapture(video_path)
@@ -77,14 +79,11 @@ def draw_contours(flow, frame):
 def optical_flow_detection(cap, prev_gray):
 
     def apply_pca_to_flow(flow_reshaped):
-        from sklearn.preprocessing import StandardScaler
-        from sklearn.decomposition import PCA
         std_scaler = StandardScaler()
         scaled_flow = std_scaler.fit_transform(flow_reshaped)
         
         pca = PCA(n_components=1)
         pca.fit(scaled_flow)
-        print(sum(pca.explained_variance_ratio_))
 
         reconstructed_flow = pca.inverse_transform(pca.transform(scaled_flow))
 
